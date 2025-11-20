@@ -1,7 +1,7 @@
 #!/bin/bash
 
 ID=$RANDOM
-export header="torchrun --nproc_per_node 1 --nnodes 1 \
+export header="torchrun --nproc_per_node 4 --nnodes 1 \
 --rdzv-id=$ID --rdzv_backend c10d \
 -m less.train.train"
 
@@ -19,7 +19,7 @@ export base_training_args="--do_train True \
 --tf32 False \
 --fp16 False \
 --overwrite_output_dir True \
---report_to wandb \
+--report_to "none" \
 --optim adamw_torch \
 --seed 0 \
 --percentage 1.0 \

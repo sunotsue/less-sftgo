@@ -50,23 +50,58 @@ def load_raw_dataset(train_files: Union[List[str], str], sample_size=None, sampl
     return sampled_dataset
 
 
-def encode_data(raw_datasets, tokenizer, max_seq_length, processing_num_workers=10, overwrite_cache=False, func_name="encode_with_messages_format"):
-    """ encode data with the specified tokenizer and the chat format. """
+# def encode_data(raw_datasets, tokenizer, max_seq_length, processing_num_workers=10, overwrite_cache=False, func_name="encode_with_messages_format"):
+#     """ encode data with the specified tokenizer and the chat format. """
+#     # if already encoded, return
+#     if "input_ids" in raw_datasets.features:
+#         return raw_datasets
+#     encode_function = get_encode_function(
+#         raw_datasets, tokenizer, max_seq_length, func_name)
+#     # To speed up this part, we use multiprocessing.
+#     lm_datasets = raw_datasets.map(
+#         encode_function,
+#         batched=False,
+#         num_proc=processing_num_workers,
+#         load_from_cache_file=not overwrite_cache,
+#         desc="Tokenizing and reformatting instruction data",
+#     )
+#     lm_datasets.set_format(type="pt")
+#     return lm_datasets
+
+def encode_data(
+    raw_datasets,
+    tokenizer,
+    max_seq_length,
+    processing_num_workers=None,  # default: no multiprocessing
+    overwrite_cache=False,
+    func_name="encode_with_messages_format",
+):
+    """Encode data with the specified tokenizer and the chat format."""
     # if already encoded, return
     if "input_ids" in raw_datasets.features:
         return raw_datasets
+
     encode_function = get_encode_function(
-        raw_datasets, tokenizer, max_seq_length, func_name)
-    # To speed up this part, we use multiprocessing.
+        raw_datasets, tokenizer, max_seq_length, func_name
+    )
+
+    # Decide whether to use multiprocessing
+    if processing_num_workers is not None and processing_num_workers > 1:
+        num_proc = processing_num_workers
+    else:
+        num_proc = None  # run in main process → avoids "Numpy is not available"
+
+    print("num proc:", num_proc)    
     lm_datasets = raw_datasets.map(
         encode_function,
         batched=False,
-        num_proc=processing_num_workers,
+        num_proc=num_proc,
         load_from_cache_file=not overwrite_cache,
         desc="Tokenizing and reformatting instruction data",
     )
     lm_datasets.set_format(type="pt")
     return lm_datasets
+
 
 
 def get_encode_function(raw_datasets, tokenizer, max_seq_length, func="encode_with_messages_format"):

@@ -12,7 +12,7 @@ import torch.distributed as dist
 import transformers
 # from instruction_tuning.train.lora_trainer import LoRAFSDPTrainer, Trainer
 from peft import LoraConfig, PeftModel, TaskType, get_peft_model
-from transformers import (AutoModelForCausalLM, AutoTokenizer,
+from transformers import (AutoConfig, AutoModelForCausalLM, AutoTokenizer,
                           DataCollatorForSeq2Seq, HfArgumentParser, Trainer,
                           set_seed)
 
@@ -23,6 +23,27 @@ from less.train.training_arguments import TrainingArguments
 
 logger = logging.getLogger(__name__)
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+from transformers.models.llama.configuration_llama import LlamaConfig
+
+# --- PATCH: make old transformers accept Llama-3 rope_scaling dicts ---
+def _patched_rope_scaling_validation(self):
+    rs = getattr(self, "rope_scaling", None)
+    # Newer Llama-3 configs have extra keys in rope_scaling.
+    if isinstance(rs, dict) and (
+        "rope_type" in rs
+        or "high_freq_factor" in rs
+        or "low_freq_factor" in rs
+        or "original_max_position_embeddings" in rs
+    ):
+        # Collapse to the old expected format: {"type": ..., "factor": ...}
+        factor = rs.get("factor", 1.0)
+        # You can pick "linear" as a generic type supported by old LlamaConfig
+        self.rope_scaling = {"type": "linear", "factor": factor}
+    # IMPORTANT: do NOT raise, just return
+    return
+
+LlamaConfig._rope_scaling_validation = _patched_rope_scaling_validation
 
 
 def main():
@@ -65,15 +86,22 @@ def main():
     set_seed(training_args.seed)
 
     tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
-    # Load training dataset
-    train_dataset = get_training_dataset(data_args.train_files,
-                                         tokenizer=tokenizer,
-                                         max_seq_length=data_args.max_seq_length,
-                                         sample_percentage=data_args.percentage,
-                                         seed=data_args.sample_data_seed)
 
+    # Load training dataset
+    train_dataset = get_training_dataset(
+        data_args.train_files,
+        tokenizer=tokenizer,
+        max_seq_length=data_args.max_seq_length,
+        sample_percentage=data_args.percentage,
+        seed=data_args.sample_data_seed,
+    )
+
+    # Simple model load: config patching is handled globally via LlamaConfig monkeypatch
     model = AutoModelForCausalLM.from_pretrained(
-        model_args.model_name_or_path, torch_dtype=model_args.torch_dtype)
+        model_args.model_name_or_path,
+        torch_dtype=model_args.torch_dtype,
+        trust_remote_code=getattr(model_args, "trust_remote_code", False),
+    )
     add_padding_to_tokenizer(tokenizer)
 
     # resize embeddings if needed (e.g. for LlamaTokenizer)
