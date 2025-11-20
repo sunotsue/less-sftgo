@@ -18,11 +18,10 @@ MODEL_PATH=/mnt/llama3.2-3b-lima-p1.0-lora-seed3/checkpoint-${CKPT}
 OUTPUT_ROOT=/mnt/grads/llama3.2-3b-lima-p1.0-lora-seed3
 OUTPUT_PATH=${OUTPUT_ROOT}/${TASK}-ckpt${CKPT}-sgd
 
-# For BBH/TydiQA/MMLU downloaded into the repo, this is usually ./data or ../data.
-# For a custom task that reads from /mnt/data, adjust get_validation_dataset.py accordingly.
+
 DATA_DIR=./data
 
-# We use 8192 as the default projection dimension (can pass multiple if you want).
+# We use 8192 as the default projection dimension
 DIMS="8192"
 
 echo "Using:"
@@ -34,6 +33,5 @@ echo "  DATA_DIR          = ${DATA_DIR}"
 echo "  DIMS              = ${DIMS}"
 echo
 
-# Call the LESS helper script (already provided by the repo)
 ./less/scripts/get_info/grad/get_eval_lora_grads.sh \
   "${TASK}" "${DATA_DIR}" "${MODEL_PATH}" "${OUTPUT_PATH}" "${DIMS}"

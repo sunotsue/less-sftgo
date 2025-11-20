@@ -14,8 +14,7 @@ set -euo pipefail
 DIM=8192
 
 # ---- TRAINING GRADIENTS (LIMA) ----
-# {} placeholders are filled by matching.sh with:
-#   {train_file_name} and {ckpt}
+
 GRADIENT_PATH="/mnt/grads/llama3.2-3b-lima-p1.0-lora-seed3/{}-ckpt{}-sgd/dim${DIM}"
 
 # You only trained on LIMA for this run
@@ -28,11 +27,9 @@ CKPTS="32"
 CHECKPOINT_WEIGHTS="1.0"
 
 # ---- VALIDATION GRADIENTS (MMLU) ----
-# Again {} placeholders: {task_name} and {ckpt}
 VALIDATION_GRADIENT_PATH="/mnt/grads/llama3.2-3b-lima-p1.0-lora-seed3/{}-ckpt{}-sgd/dim${DIM}"
 
 # Target task(s) whose validation grads you computed.
-# Here we use MMLU; you can add more tasks space-separated if you compute them.
 TARGET_TASK_NAMES="mmlu"
 
 # Where to dump selected training data indices / metadata
