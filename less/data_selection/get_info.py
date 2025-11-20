@@ -35,37 +35,60 @@ def _patched_rope_scaling_validation(self):
 LlamaConfig._rope_scaling_validation = _patched_rope_scaling_validation
 
 
+import os
+from typing import Any
+
+import torch
+from transformers import AutoModelForCausalLM
+from peft import PeftModel, LoraConfig
+
+
 def load_model(model_name_or_path: str,
                torch_dtype: Any = torch.bfloat16) -> Any:
     """
-    Load a model from a given model name or path.
-
-    Args:
-        model_name_or_path (str): The name or path of the model.
-        torch_dtype (Any, optional): The torch data type. Defaults to torch.bfloat16.
+    Load a (possibly LoRA) model and put it on a single GPU (cuda:0 if available).
 
     Returns:
-        Any: The loaded model.
+        torch.nn.Module: The loaded model on device.
     """
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-    is_peft = os.path.exists(os.path.join(
-        model_name_or_path, "adapter_config.json"))
+    is_peft = os.path.exists(os.path.join(model_name_or_path, "adapter_config.json"))
+
     if is_peft:
-        # load this way to make sure that optimizer states match the model structure
+        # Load base model + LoRA adapter checkpoint
         config = LoraConfig.from_pretrained(model_name_or_path)
-        base_model = AutoModelForCausalLM.from_pretrained(
-            config.base_model_name_or_path, torch_dtype=torch_dtype, device_map=None)
-        model = PeftModel.from_pretrained(
-            base_model, model_name_or_path, device_map=None)
-    else:
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name_or_path, torch_dtype=torch_dtype, device_map=None) # from auto
+        base_model_name = config.base_model_name_or_path
 
-    for name, param in model.named_parameters():
-        if 'lora' in name or 'Lora' in name:
-            param.requires_grad = True
-    
+        base_model = AutoModelForCausalLM.from_pretrained(
+            base_model_name,
+            torch_dtype=torch_dtype,
+            device_map=None,     # start on CPU, we'll move to GPU explicitly
+        )
+        model = PeftModel.from_pretrained(
+            base_model,
+            model_name_or_path,
+            device_map=None,     # keep unified, not sharded
+        )
+
+        # Ensure only LoRA parameters require gradients (LESS assumes this)
+        for name, param in model.named_parameters():
+            param.requires_grad = ("lora" in name.lower())
+
+    else:
+        # Plain HF model (no LoRA)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name_or_path,
+            torch_dtype=torch_dtype,
+            device_map=None,
+        )
+
+    # *** Move full model to a single GPU (or CPU fallback) ***
+    model.to(device)
+    print(f"[LESS] Loaded model from {model_name_or_path} onto device: {device}")
+
     return model
+
 
 
 parser = argparse.ArgumentParser(
