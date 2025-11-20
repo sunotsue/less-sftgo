@@ -2,27 +2,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Which checkpoint from the warmup run to use (e.g. 500, 1000, 1500...)
-CKPT="${1:-500}"
+# Which checkpoint from the warmup run to use
+CKPT="${1:-32}"
 
 # Name for this training dataset (just used in output path naming)
 TRAINING_DATA_NAME="lima"
 
 # Path to the LIMA training file you used in warmup.
-# If you used /mnt/data/lima.jsonl in warmup, set that here instead.
 TRAINING_DATA_FILE="/mnt/data/lima.jsonl"
 
-# Where your warmup LoRA checkpoints were written.
-# Adjust if your warmup script used a different output_dir.
+# Where warmup LoRA checkpoints were written.
 MODEL_DIR="/mnt/llama3.2-3b-lima-p1.0-lora-seed3"
 
-# Gradient type to extract ("adam" is what LESS uses in the README)
+# Gradient type to extract
 GRADIENT_TYPE="sgd" # "adam"
 
 # Dimension of the gradient embedding for the datastore
 DIMS="8192"
-
-# --------- DERIVED PATHS (usually no need to edit) ---------
 
 # The specific checkpoint directory to read from
 MODEL_PATH="${MODEL_DIR}/checkpoint-${CKPT}"
@@ -47,6 +43,3 @@ echo
   "$OUTPUT_PATH" \
   "$DIMS" \
   "$GRADIENT_TYPE"
-
-
-# ./run_lima_build_grad_store.sh 32
