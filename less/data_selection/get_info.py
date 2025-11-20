@@ -17,6 +17,22 @@ from less.data_selection.collect_grad_reps import (collect_grads, collect_reps,
 from less.data_selection.get_training_dataset import get_training_dataset
 from less.data_selection.get_validation_dataset import (get_dataloader,
                                                         get_dataset)
+from transformers.models.llama.configuration_llama import LlamaConfig
+
+# --- PATCH: Llama-3 rope_scaling compatibility ---
+def _patched_rope_scaling_validation(self):
+    rs = getattr(self, "rope_scaling", None)
+    if isinstance(rs, dict) and (
+        "rope_type" in rs
+        or "high_freq_factor" in rs
+        or "low_freq_factor" in rs
+        or "original_max_position_embeddings" in rs
+    ):
+        factor = rs.get("factor", 1.0)
+        self.rope_scaling = {"type": "linear", "factor": factor}
+    return
+
+LlamaConfig._rope_scaling_validation = _patched_rope_scaling_validation
 
 
 def load_model(model_name_or_path: str,
@@ -38,16 +54,17 @@ def load_model(model_name_or_path: str,
         # load this way to make sure that optimizer states match the model structure
         config = LoraConfig.from_pretrained(model_name_or_path)
         base_model = AutoModelForCausalLM.from_pretrained(
-            config.base_model_name_or_path, torch_dtype=torch_dtype, device_map="auto")
+            config.base_model_name_or_path, torch_dtype=torch_dtype, device_map=None)
         model = PeftModel.from_pretrained(
-            base_model, model_name_or_path, device_map="auto")
+            base_model, model_name_or_path, device_map=None)
     else:
         model = AutoModelForCausalLM.from_pretrained(
-            model_name_or_path, torch_dtype=torch_dtype, device_map="auto")
+            model_name_or_path, torch_dtype=torch_dtype, device_map=None) # from auto
 
     for name, param in model.named_parameters():
         if 'lora' in name or 'Lora' in name:
             param.requires_grad = True
+    
     return model
 
 
@@ -125,7 +142,7 @@ if isinstance(model, PeftModel):
 
 adam_optimizer_state = None
 if args.info_type == "grads" and args.gradient_type == "adam":
-    optimizer_path = os.path.join(args.model_path, "optimizer.bin")
+    optimizer_path = os.path.join(args.model_path, "optimizer.pt")
     adam_optimizer_state = torch.load(
         optimizer_path, map_location="cpu")["state"]
 

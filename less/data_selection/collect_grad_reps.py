@@ -56,7 +56,6 @@ def get_output(model,
         shift_logits.view(-1, shift_logits.shape[-1]), shift_labels.view(-1))
     return loss
 
-
 def get_trak_projector(device: torch.device):
     """ Get trak projectors (see https://github.com/MadryLab/trak for details) """
     try:
@@ -65,14 +64,15 @@ def get_trak_projector(device: torch.device):
         import fast_jl
 
         # test run to catch at init time if projection goes through
-        fast_jl.project_rademacher_8(torch.zeros(
-            8, 1_000, device=device), 512, 0, num_sms)
-        projector = CudaProjector
+        fast_jl.project_rademacher_8(
+            torch.zeros(8, 1_000, device=device), 512, 0, num_sms
+        )
         print("Using CudaProjector")
-    except:
-        projector = BasicProjector
-        print("Using BasicProjector")
-    return projector
+        return CudaProjector
+    except Exception as e:
+        print(f"[LESS] CudaProjector failed, falling back to BasicProjector: {repr(e)}")
+        return BasicProjector
+
 
 
 def get_number_of_params(model):
@@ -87,12 +87,46 @@ def get_number_of_params(model):
     return num_params
 
 
+# def obtain_gradients(model, batch):
+#     """ obtain gradients. """
+#     loss = model(**batch).loss
+#     loss.backward()
+#     vectorized_grads = torch.cat(
+#         [p.grad.view(-1) for p in model.parameters() if p.grad is not None])
+#     return vectorized_grads
+
 def obtain_gradients(model, batch):
-    """ obtain gradients. """
-    loss = model(**batch).loss
+    """Run a forward+backward pass and return flattened gradients on one device."""
+    # Use the device of the first parameter as the "canonical" device
+    device = next(model.parameters()).device
+
+    # Move batch tensors to that device
+    batch_on_device = {}
+    for k, v in batch.items():
+        if isinstance(v, torch.Tensor):
+            batch_on_device[k] = v.to(device)
+        else:
+            batch_on_device[k] = v
+
+    # Forward + backward
+    outputs = model(**batch_on_device)
+    loss = outputs.loss
     loss.backward()
-    vectorized_grads = torch.cat(
-        [p.grad.view(-1) for p in model.parameters() if p.grad is not None])
+
+    # Collect all grads, move them to the same device, and flatten
+    grads = []
+    for p in model.parameters():
+        if p.grad is not None:
+            grads.append(p.grad.detach().to(device).view(-1))
+
+    if not grads:
+        raise RuntimeError("No gradients found for any parameters.")
+
+    vectorized_grads = torch.cat(grads, dim=0)
+
+    # Optional but good hygiene: clear grads after use
+    model.zero_grad(set_to_none=True)
+
     return vectorized_grads
 
 
@@ -126,15 +160,41 @@ def obtain_gradients_with_adam(model, batch, avg, avg_sq):
 
     return vectorized_grads
 
-
 def prepare_optimizer_state(model, optimizer_state, device):
-    names = [n for n, p in model.named_parameters() if p.requires_grad]
-    avg = torch.cat([optimizer_state[n]["exp_avg"].view(-1) for n in names])
-    avg_sq = torch.cat([optimizer_state[n]["exp_avg_sq"].view(-1)
-                       for n in names])
-    avg = avg.to(device)
-    avg_sq = avg_sq.to(device)
+    """
+    Build flattened Adam first/second moment vectors (avg, avg_sq) for all
+    parameters that both:
+      - require_grad in the model, and
+      - have entries in optimizer_state.
+
+    This avoids KeyError when some trainable params (e.g. certain LoRA weights)
+    don't have Adam state saved in the checkpoint.
+    """
+    # All trainable parameter names in the model
+    all_names = [n for n, p in model.named_parameters() if p.requires_grad]
+
+    # Only keep names that actually appear in the optimizer state
+    names = [n for n in all_names if n in optimizer_state]
+
+    missing = sorted(set(all_names) - set(names))
+    if missing:
+        print(
+            f"[LESS] Warning: {len(missing)} trainable parameters have no Adam "
+            f"state and will be skipped. Example: {missing[0]!r}"
+        )
+
+    if not names:
+        raise RuntimeError(
+            "No overlapping trainable parameters between model and optimizer_state. "
+            "Check that MODEL_PATH points to a checkpoint with optimizer.pt "
+            "and that it matches the loaded model."
+        )
+
+    avg = torch.cat([optimizer_state[n]["exp_avg"].view(-1) for n in names]).to(device)
+    avg_sq = torch.cat([optimizer_state[n]["exp_avg_sq"].view(-1) for n in names]).to(device)
+
     return avg, avg_sq
+
 
 
 def collect_grads(dataloader,
@@ -204,14 +264,22 @@ def collect_grads(dataloader,
     # initialize a project for each target projector dimension
     projectors = []
     for dim in proj_dim:
-        proj = projector(grad_dim=number_of_params,
-                         proj_dim=dim,
-                         seed=0,
-                         proj_type=ProjectionType.rademacher,
-                         device=device,
-                         dtype=dtype,
-                         block_size=block_size,
-                         max_batch_size=projector_batch_size)
+        projector_kwargs = dict(
+            grad_dim=number_of_params,
+            proj_dim=dim,
+            seed=0,
+            proj_type=ProjectionType.rademacher,
+            device=device,
+            dtype=dtype,
+            block_size=block_size,
+        )
+
+        # Only CudaProjector in trak supports max_batch_size in your version.
+        # BasicProjector will crash if we pass it.
+        if projector is CudaProjector:
+            projector_kwargs["max_batch_size"] = projector_batch_size
+
+        proj = projector(**projector_kwargs)
         projectors.append(proj)
 
     count = 0
